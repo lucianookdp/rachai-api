@@ -59,7 +59,11 @@ async function requireAdminAuth(request: FastifyRequest, reply: FastifyReply) {
 // readable cookie set at login (the classic double-submit pattern). A bearer
 // token carries no such risk: a forged cross-site request can't attach an
 // Authorization header it doesn't have, so there is nothing to check.
-function requireCsrf(request: FastifyRequest, reply: FastifyReply): void {
+//
+// This must stay declared `async`: a plain sync function here, chained after
+// the async requireAdminAuth in the same preHandler array, made Fastify 5
+// hang the request indefinitely instead of calling the route handler.
+async function requireCsrf(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (request.adminAuthMethod === 'bearer') return;
 
   const cookieValue = request.cookies[CSRF_COOKIE];
