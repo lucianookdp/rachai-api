@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import argon2 from 'argon2';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticator } from 'otplib';
-import { signAdminTempToken, signAdminToken, verifyAdminTempToken, verifyAdminToken } from '../lib/auth.js';
+import { extractBearerToken, signAdminTempToken, signAdminToken, verifyAdminTempToken, verifyAdminToken } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { adminLoginSchema, adminTotpVerifySchema } from '../schemas/admin.js';
 
@@ -10,7 +10,7 @@ const SESSION_COOKIE = 'rachai_admin_session';
 const CSRF_COOKIE = 'rachai_admin_csrf';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
 
-function issueSession(reply: FastifyReply, app: FastifyInstance, adminId: string) {
+function issueSession(reply: FastifyReply, app: FastifyInstance, adminId: string): string {
   const sessionToken = signAdminToken(adminId, app.jwtSecret);
   const csrfToken = randomBytes(24).toString('hex');
 
@@ -32,11 +32,18 @@ function issueSession(reply: FastifyReply, app: FastifyInstance, adminId: string
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
+
+  return sessionToken;
 }
 
+// Accepts either an Authorization: Bearer token or the session cookie, so
+// this keeps working whether the admin frontend ends up on the same domain
+// as the API (cookie) or a different one, where a cross-site cookie can be
+// silently dropped by the browser (bearer).
 async function requireAdminAuth(request: FastifyRequest, reply: FastifyReply) {
   const app = request.server;
-  const sessionToken = request.cookies[SESSION_COOKIE];
+  const bearerToken = extractBearerToken(request.headers.authorization);
+  const sessionToken = bearerToken ?? request.cookies[SESSION_COOKIE];
   const payload = sessionToken ? verifyAdminToken(sessionToken, app.jwtSecret) : null;
 
   if (!payload) {
@@ -44,12 +51,17 @@ async function requireAdminAuth(request: FastifyRequest, reply: FastifyReply) {
   }
 
   request.adminId = payload.adminId;
+  request.adminAuthMethod = bearerToken ? 'bearer' : 'cookie';
 }
 
 // Cookies alone are not enough CSRF protection for state-changing requests,
-// so mutating routes also require this header to match the readable cookie
-// set at login (the classic double-submit pattern).
+// so a cookie-authenticated mutation also requires this header to match the
+// readable cookie set at login (the classic double-submit pattern). A bearer
+// token carries no such risk: a forged cross-site request can't attach an
+// Authorization header it doesn't have, so there is nothing to check.
 function requireCsrf(request: FastifyRequest, reply: FastifyReply): void {
+  if (request.adminAuthMethod === 'bearer') return;
+
   const cookieValue = request.cookies[CSRF_COOKIE];
   const headerValue = request.headers['x-csrf-token'];
   if (!cookieValue || !headerValue || cookieValue !== headerValue) {
@@ -81,8 +93,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         return { requiresTotp: true, tempToken };
       }
 
-      issueSession(reply, app, admin.id);
-      return { requiresTotp: false };
+      const token = issueSession(reply, app, admin.id);
+      return { requiresTotp: false, token };
     },
   });
 
@@ -100,8 +112,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         return reply.status(401).send({ error: 'Invalid code' });
       }
 
-      issueSession(reply, app, admin.id);
-      return { ok: true };
+      const token = issueSession(reply, app, admin.id);
+      return { ok: true, token };
     },
   });
 
