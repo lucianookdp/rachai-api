@@ -17,14 +17,18 @@ function issueSession(reply: FastifyReply, app: FastifyInstance, adminId: string
   reply.setCookie(SESSION_COOKIE, sessionToken, {
     httpOnly: true,
     secure: true,
-    sameSite: 'strict',
+    // The admin frontend and this API are on different domains, and a
+    // SameSite=Strict cookie is never sent on a cross-site request no
+    // matter what CORS allows. The exact-origin CORS allowlist plus the
+    // double-submit CSRF token are what actually protect this cookie.
+    sameSite: 'none',
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
   reply.setCookie(CSRF_COOKIE, csrfToken, {
     httpOnly: false,
     secure: true,
-    sameSite: 'strict',
+    sameSite: 'none',
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
