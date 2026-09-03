@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Group {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  pinHash   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants Participant[]
+  expenses     Expense[]
+  payments     Payment[]
+
+  @@index([createdAt])
+}
+
+model Participant {
+  id        String   @id @default(cuid())
+  groupId   String
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+
+  paidExpenses  Expense[]      @relation("ExpensePaidBy")
+  shares        ExpenseShare[]
+  paymentsSent  Payment[]      @relation("PaymentFrom")
+  paymentsRecv  Payment[]      @relation("PaymentTo")
+
+  @@index([groupId])
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  groupId     String
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  description String
+  amountCents Int
+  paidById    String
+  paidBy      Participant @relation("ExpensePaidBy", fields: [paidById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shares ExpenseShare[]
+
+  @@index([groupId])
+  @@index([paidById])
+}
+
+model ExpenseShare {
+  id            String      @id @default(cuid())
+  expenseId     String
+  expense       Expense     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  shareCents    Int
+
+  @@unique([expenseId, participantId])
+  @@index([participantId])
+}
+
+model Payment {
+  id          String      @id @default(cuid())
+  groupId     String
+  group       Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromId      String
+  from        Participant @relation("PaymentFrom", fields: [fromId], references: [id])
+  toId        String
+  to          Participant @relation("PaymentTo", fields: [toId], references: [id])
+  amountCents Int
+  createdAt   DateTime    @default(now())
+
+  @@index([groupId])
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  totpSecret   String?
+  totpEnabled  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  auditLogs AdminAuditLog[]
+}
+
+model AdminAuditLog {
+  id         String    @id @default(cuid())
+  adminId    String
+  admin      AdminUser @relation(fields: [adminId], references: [id])
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([adminId])
+  @@index([createdAt])
+}
