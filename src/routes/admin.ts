@@ -151,12 +151,21 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/dashboard/stats', { preHandler: requireAdminAuth }, async () => {
     const activeSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const [totalGroups, activeGroups, totalExpenses, volume] = await Promise.all([
+    const [totalGroups, activeGroups, totalExpenses] = await Promise.all([
       prisma.group.count(),
       prisma.group.count({ where: { active: true, updatedAt: { gte: activeSince } } }),
       prisma.expense.count(),
-      prisma.expense.aggregate({ _sum: { amountCents: true } }),
     ]);
+
+    // Groups can each bill in a different currency, so a single summed total
+    // would silently add dollars to reais. Break the volume down per currency.
+    const volumeByCurrency = await prisma.$queryRaw<Array<{ currency: string; total: bigint }>>`
+      SELECT g.currency AS currency, SUM(e."amountCents") AS total
+      FROM "Expense" e
+      JOIN "Group" g ON g.id = e."groupId"
+      GROUP BY g.currency
+      ORDER BY total DESC
+    `;
 
     const groupsByDay = await prisma.$queryRaw<Array<{ day: Date; count: bigint }>>`
       SELECT date_trunc('day', "createdAt") AS day, COUNT(*) AS count
@@ -170,7 +179,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       totalGroups,
       activeGroups,
       totalExpenses,
-      totalVolumeCents: volume._sum.amountCents ?? 0,
+      totalVolumeByCurrency: volumeByCurrency.map((row) => ({
+        currency: row.currency,
+        amountCents: Number(row.total),
+      })),
       groupsByDay: groupsByDay.map((row) => ({ day: row.day, count: Number(row.count) })),
     };
   });
@@ -186,6 +198,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         id: true,
         name: true,
         code: true,
+        currency: true,
         active: true,
         createdAt: true,
         _count: { select: { participants: true, expenses: true } },
