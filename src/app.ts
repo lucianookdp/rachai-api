@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import { ZodError } from 'zod';
 import type { Env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { registerAdminRoutes } from './routes/admin.js';
@@ -45,7 +46,12 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   app.decorate('jwtSecret', env.JWT_SECRET);
 
-  app.setErrorHandler((error: FastifyError, _request, reply) => {
+  app.setErrorHandler((error: FastifyError | ZodError, _request, reply) => {
+    if (error instanceof ZodError) {
+      const message = error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join(', ');
+      return reply.status(400).send({ error: message });
+    }
+
     app.log.error(error);
     const statusCode = error.statusCode && error.statusCode < 500 ? error.statusCode : 500;
     const message = statusCode < 500 ? error.message : 'Internal server error';
