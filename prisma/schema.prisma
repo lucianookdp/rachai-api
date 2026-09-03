@@ -12,6 +12,8 @@ model Group {
   name      String
   code      String   @unique
   pinHash   String
+  // ISO 4217 currency code (e.g. "USD", "BRL", "EUR") for every amount in this group.
+  currency  String   @default("USD")
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
