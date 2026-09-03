@@ -1,12 +1,20 @@
 import { z } from 'zod';
+import { isSupportedCurrency } from '../lib/currencies.js';
 
 export const pinSchema = z
   .string()
   .regex(/^\d{4,6}$/, 'PIN must be 4 to 6 digits');
 
+export const currencySchema = z
+  .string()
+  .length(3)
+  .transform((value) => value.toUpperCase())
+  .refine(isSupportedCurrency, { message: 'Unsupported currency code' });
+
 export const createGroupSchema = z.object({
   name: z.string().trim().min(1).max(80),
   pin: pinSchema,
+  currency: currencySchema,
 });
 
 export const joinGroupSchema = z.object({

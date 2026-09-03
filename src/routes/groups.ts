@@ -57,10 +57,10 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       }
 
       const group = await prisma.group.create({
-        data: { name: body.name, code, pinHash },
+        data: { name: body.name, code, pinHash, currency: body.currency },
       });
 
-      return reply.status(201).send({ code: group.code, name: group.name });
+      return reply.status(201).send({ code: group.code, name: group.name, currency: group.currency });
     },
   });
 
@@ -81,13 +81,13 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       }
 
       const token = signGroupToken(group.id, app.jwtSecret);
-      return { token, name: group.name };
+      return { token, name: group.name, currency: group.currency };
     },
   });
 
   app.get('/:code', { preHandler: requireGroupAuth }, async (request) => {
     const group = await prisma.group.findUniqueOrThrow({ where: { id: request.groupId } });
-    return { code: group.code, name: group.name, createdAt: group.createdAt };
+    return { code: group.code, name: group.name, currency: group.currency, createdAt: group.createdAt };
   });
 
   app.post('/:code/participants', { preHandler: requireGroupAuth }, async (request, reply) => {
