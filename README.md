@@ -38,7 +38,9 @@ npm test
 
 ## Deployment
 
-Deployed on [Railway](https://railway.app/) with a managed Postgres instance.
+Deployed on [Railway](https://railway.app/) with a managed Postgres instance:
+**https://rachai-api-production.up.railway.app**
+
 All configuration is passed through environment variables — see
 `.env.example` for the full list.
 
@@ -46,7 +48,7 @@ All configuration is passed through environment variables — see
 
 | Route | Description |
 | --- | --- |
-| `POST /groups` | Create a group, returns its join code |
+| `POST /groups` | Create a group with a name, PIN and currency; returns its join code |
 | `POST /groups/:code/join` | Join with code + PIN, returns a session token |
 | `GET /groups/:code` | Group details |
 | `POST /groups/:code/participants` | Add a participant |
