@@ -4,6 +4,7 @@ import { calculateNetBalances } from '../lib/balances.js';
 import { extractBearerToken, signGroupToken, verifyGroupToken } from '../lib/auth.js';
 import { simplifyDebts } from '../lib/debtSimplification.js';
 import { generateGroupCode } from '../lib/groupCode.js';
+import { touchGroupActivity } from '../lib/groupActivity.js';
 import { splitEqually } from '../lib/money.js';
 import { prisma } from '../lib/prisma.js';
 import {
@@ -95,6 +96,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     const participant = await prisma.participant.create({
       data: { groupId: request.groupId!, name: body.name },
     });
+    await touchGroupActivity(request.groupId!);
     return reply.status(201).send(participant);
   });
 
@@ -138,6 +140,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       include: { shares: true },
     });
 
+    await touchGroupActivity(groupId);
     return reply.status(201).send(expense);
   });
 
@@ -197,6 +200,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       });
     });
 
+    await touchGroupActivity(groupId);
     return updated;
   });
 
@@ -207,6 +211,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'Expense not found' });
     }
     await prisma.expense.delete({ where: { id } });
+    await touchGroupActivity(request.groupId!);
     return reply.status(204).send();
   });
 
@@ -265,6 +270,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       data: { groupId, fromId: body.fromId, toId: body.toId, amountCents: body.amountCents },
     });
 
+    await touchGroupActivity(groupId);
     return reply.status(201).send(payment);
   });
 

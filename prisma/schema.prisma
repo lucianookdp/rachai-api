@@ -17,12 +17,18 @@ model Group {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // Bumped on every participant/expense/payment change, never on read-only
+  // requests. A scheduled sweep deletes groups nobody has touched in a
+  // while, keyed off this instead of createdAt, so a long-running group
+  // never gets swept just because it's old.
+  lastActivityAt DateTime @default(now())
 
   participants Participant[]
   expenses     Expense[]
   payments     Payment[]
 
   @@index([createdAt])
+  @@index([lastActivityAt])
 }
 
 model Participant {
