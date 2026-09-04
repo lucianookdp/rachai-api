@@ -14,24 +14,23 @@ function issueSession(reply: FastifyReply, app: FastifyInstance, adminId: string
   const sessionToken = signAdminToken(adminId, app.jwtSecret);
   const csrfToken = randomBytes(24).toString('hex');
 
-  reply.setCookie(SESSION_COOKIE, sessionToken, {
+  // With COOKIE_DOMAIN set, the frontend and this API are subdomains of the
+  // same registrable domain — SameSite=Lax is sent on that cross-subdomain
+  // fetch because "site" is defined by the registrable domain, not the exact
+  // origin. Without it, they're unrelated domains and the cookie would be
+  // dropped as third-party unless it's SameSite=None; the exact-origin CORS
+  // allowlist plus the double-submit CSRF token carry the protection then.
+  const cookieOptions = {
     httpOnly: true,
     secure: true,
-    // The admin frontend and this API are on different domains, and a
-    // SameSite=Strict cookie is never sent on a cross-site request no
-    // matter what CORS allows. The exact-origin CORS allowlist plus the
-    // double-submit CSRF token are what actually protect this cookie.
-    sameSite: 'none',
+    sameSite: (app.cookieDomain ? 'lax' : 'none') as 'lax' | 'none',
+    domain: app.cookieDomain,
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
-  });
-  reply.setCookie(CSRF_COOKIE, csrfToken, {
-    httpOnly: false,
-    secure: true,
-    sameSite: 'none',
-    path: '/',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  };
+
+  reply.setCookie(SESSION_COOKIE, sessionToken, cookieOptions);
+  reply.setCookie(CSRF_COOKIE, csrfToken, { ...cookieOptions, httpOnly: false });
 
   return sessionToken;
 }
@@ -122,8 +121,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
 
   app.post('/auth/logout', { preHandler: requireAdminAuth }, async (_request, reply) => {
-    reply.clearCookie(SESSION_COOKIE, { path: '/' });
-    reply.clearCookie(CSRF_COOKIE, { path: '/' });
+    // A cookie is only cleared by a Set-Cookie that repeats its exact
+    // domain/path — otherwise the browser treats it as a different cookie
+    // and the original just sits there until it expires on its own.
+    reply.clearCookie(SESSION_COOKIE, { path: '/', domain: app.cookieDomain });
+    reply.clearCookie(CSRF_COOKIE, { path: '/', domain: app.cookieDomain });
     return { ok: true };
   });
 
