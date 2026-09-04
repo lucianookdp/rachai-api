@@ -45,6 +45,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   });
 
   app.decorate('jwtSecret', env.JWT_SECRET);
+  app.decorate('cookieDomain', env.COOKIE_DOMAIN);
 
   // This is a JSON API with no use for any browser feature, so disable them all.
   app.addHook('onSend', async (_request, reply, payload) => {
