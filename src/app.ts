@@ -5,6 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import type { Env } from './config/env.js';
+import { scheduleGroupCleanup } from './lib/groupCleanup.js';
 import { prisma } from './lib/prisma.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerGroupRoutes } from './routes/groups.js';
@@ -79,6 +80,8 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   await app.register(registerGroupRoutes, { prefix: '/groups' });
   await app.register(registerAdminRoutes, { prefix: '/admin' });
+
+  scheduleGroupCleanup(app);
 
   return app;
 }
