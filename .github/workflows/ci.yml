@@ -46,4 +46,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npm audit --audit-level=high
+
+      # Reports on production dependencies only — a dev-tool advisory doesn't
+      # ship to users. Kept non-blocking on purpose: npm's audit endpoint is
+      # being retired and answers with 400s and timeouts, and a build that goes
+      # red on a registry hiccup just teaches you to ignore CI. Dependabot is
+      # what actually watches for advisories here.
+      - run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
