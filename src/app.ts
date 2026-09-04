@@ -46,6 +46,15 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   app.decorate('jwtSecret', env.JWT_SECRET);
 
+  // This is a JSON API with no use for any browser feature, so disable them all.
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header(
+      'Permissions-Policy',
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
+    );
+    return payload;
+  });
+
   app.setErrorHandler((error: FastifyError | ZodError, _request, reply) => {
     if (error instanceof ZodError) {
       const message = error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join(', ');
