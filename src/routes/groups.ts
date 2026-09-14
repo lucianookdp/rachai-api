@@ -4,8 +4,8 @@ import { calculateNetBalances } from '../lib/balances.js';
 import { extractBearerToken, signGroupToken, verifyGroupToken } from '../lib/auth.js';
 import { simplifyDebts } from '../lib/debtSimplification.js';
 import { generateGroupCode } from '../lib/groupCode.js';
+import { resolveShares } from '../lib/expenseShares.js';
 import { touchGroupActivity } from '../lib/groupActivity.js';
-import { splitEqually } from '../lib/money.js';
 import { prisma } from '../lib/prisma.js';
 import {
   addParticipantSchema,
@@ -117,12 +117,13 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'paidById is not a participant in this group' });
     }
 
-    const splitAmong = body.participantIds ?? [...participantIds];
-    if (!splitAmong.every((id) => participantIds.has(id))) {
-      return reply.status(400).send({ error: 'participantIds contains someone outside this group' });
+    const resolved = resolveShares(body.amountCents, participantIds, {
+      participantIds: body.participantIds,
+      shares: body.shares,
+    });
+    if (!resolved.ok) {
+      return reply.status(400).send({ error: resolved.error });
     }
-
-    const shares = splitEqually(body.amountCents, splitAmong.length);
 
     const expense = await prisma.expense.create({
       data: {
@@ -130,12 +131,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
         description: body.description,
         amountCents: body.amountCents,
         paidById: body.paidById,
-        shares: {
-          create: splitAmong.map((participantId, index) => ({
-            participantId,
-            shareCents: shares[index]!,
-          })),
-        },
+        shares: { create: resolved.shares },
       },
       include: { shares: true },
     });
@@ -171,34 +167,50 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     }
 
     const amountCents = body.amountCents ?? existing.amountCents;
-    const splitAmong =
-      body.participantIds ??
-      (await prisma.expenseShare.findMany({ where: { expenseId: id } })).map((s) => s.participantId);
 
-    if (!splitAmong.every((pid) => participantIds.has(pid))) {
-      return reply.status(400).send({ error: 'participantIds contains someone outside this group' });
-    }
+    // Only touch the shares at all when something that affects them was
+    // actually sent. Otherwise (e.g. just fixing the description) a custom,
+    // unequal split would silently get flattened back to an equal one.
+    const moneyFieldsChanged =
+      body.amountCents !== undefined || body.participantIds !== undefined || body.shares !== undefined;
 
-    const shares = splitEqually(amountCents, splitAmong.length);
-
-    const updated = await prisma.$transaction(async (tx) => {
-      await tx.expenseShare.deleteMany({ where: { expenseId: id } });
-      return tx.expense.update({
+    let updated;
+    if (!moneyFieldsChanged) {
+      updated = await prisma.expense.update({
         where: { id },
-        data: {
-          description: body.description ?? existing.description,
-          amountCents,
-          paidById,
-          shares: {
-            create: splitAmong.map((participantId, index) => ({
-              participantId,
-              shareCents: shares[index]!,
-            })),
-          },
-        },
+        data: { description: body.description ?? existing.description, paidById },
         include: { shares: true },
       });
-    });
+    } else {
+      const shareOptions = body.shares
+        ? { shares: body.shares }
+        : body.participantIds
+          ? { participantIds: body.participantIds }
+          : {
+              participantIds: (await prisma.expenseShare.findMany({ where: { expenseId: id } })).map(
+                (s) => s.participantId,
+              ),
+            };
+
+      const resolved = resolveShares(amountCents, participantIds, shareOptions);
+      if (!resolved.ok) {
+        return reply.status(400).send({ error: resolved.error });
+      }
+
+      updated = await prisma.$transaction(async (tx) => {
+        await tx.expenseShare.deleteMany({ where: { expenseId: id } });
+        return tx.expense.update({
+          where: { id },
+          data: {
+            description: body.description ?? existing.description,
+            amountCents,
+            paidById,
+            shares: { create: resolved.shares },
+          },
+          include: { shares: true },
+        });
+      });
+    }
 
     await touchGroupActivity(groupId);
     return updated;

@@ -25,11 +25,20 @@ export const addParticipantSchema = z.object({
   name: z.string().trim().min(1).max(80),
 });
 
+const expenseShareInputSchema = z.object({
+  participantId: z.string().min(1),
+  shareCents: z.number().int().positive(),
+});
+
 export const createExpenseSchema = z.object({
   description: z.string().trim().min(1).max(200),
   amountCents: z.number().int().positive(),
   paidById: z.string().min(1),
   participantIds: z.array(z.string().min(1)).min(1).optional(),
+  // Custom, unequal shares as an alternative to participantIds (equal
+  // split). If both are sent, shares wins; the shares must sum to
+  // amountCents exactly, which the route validates.
+  shares: z.array(expenseShareInputSchema).min(1).optional(),
 });
 
 export const updateExpenseSchema = z.object({
@@ -37,6 +46,7 @@ export const updateExpenseSchema = z.object({
   amountCents: z.number().int().positive().optional(),
   paidById: z.string().min(1).optional(),
   participantIds: z.array(z.string().min(1)).min(1).optional(),
+  shares: z.array(expenseShareInputSchema).min(1).optional(),
 });
 
 export const recordPaymentSchema = z.object({
