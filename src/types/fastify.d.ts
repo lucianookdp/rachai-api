@@ -8,6 +8,7 @@ declare module 'fastify' {
 
   interface FastifyRequest {
     groupId?: string;
+    groupRole?: 'editor' | 'viewer';
     adminId?: string;
     adminAuthMethod?: 'cookie' | 'bearer';
   }

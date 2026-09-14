@@ -1,8 +1,11 @@
 import jwt from 'jsonwebtoken';
 
+export type GroupRole = 'editor' | 'viewer';
+
 interface GroupTokenPayload {
   type: 'group';
   groupId: string;
+  role: GroupRole;
 }
 
 interface AdminTokenPayload {
@@ -19,8 +22,8 @@ const GROUP_TOKEN_TTL = '24h';
 const ADMIN_TOKEN_TTL = '12h';
 const ADMIN_TEMP_TOKEN_TTL = '5m';
 
-export function signGroupToken(groupId: string, secret: string): string {
-  const payload: GroupTokenPayload = { type: 'group', groupId };
+export function signGroupToken(groupId: string, secret: string, role: GroupRole): string {
+  const payload: GroupTokenPayload = { type: 'group', groupId, role };
   return jwt.sign(payload, secret, { expiresIn: GROUP_TOKEN_TTL });
 }
 

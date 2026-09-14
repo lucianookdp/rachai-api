@@ -35,6 +35,15 @@ async function requireGroupAuth(request: FastifyRequest, reply: FastifyReply) {
   }
 
   request.groupId = group.id;
+  request.groupRole = payload.role;
+}
+
+// A viewer (someone who only has the invite link, not the PIN) can read
+// everything but never change anything. Chain this after requireGroupAuth.
+async function requireEditor(request: FastifyRequest, reply: FastifyReply) {
+  if (request.groupRole !== 'editor') {
+    return reply.status(403).send({ error: 'The group PIN is required to make changes' });
+  }
 }
 
 export async function registerGroupRoutes(app: FastifyInstance) {
@@ -81,8 +90,26 @@ export async function registerGroupRoutes(app: FastifyInstance) {
         return reply.status(401).send({ error: 'Invalid code or PIN' });
       }
 
-      const token = signGroupToken(group.id, app.jwtSecret);
-      return { token, name: group.name, currency: group.currency };
+      const token = signGroupToken(group.id, app.jwtSecret, 'editor');
+      return { token, name: group.name, currency: group.currency, role: 'editor' as const };
+    },
+  });
+
+  // No PIN required: this is how someone who only has the invite link (not
+  // the PIN) gets a read-only look at the group. See requireEditor for the
+  // other half of this.
+  app.post('/:code/view', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    handler: async (request, reply) => {
+      const { code } = request.params as { code: string };
+
+      const group = await prisma.group.findUnique({ where: { code: code.toUpperCase() } });
+      if (!group || !group.active) {
+        return reply.status(404).send({ error: 'Group not found' });
+      }
+
+      const token = signGroupToken(group.id, app.jwtSecret, 'viewer');
+      return { token, name: group.name, currency: group.currency, role: 'viewer' as const };
     },
   });
 
@@ -91,7 +118,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     return { code: group.code, name: group.name, currency: group.currency, createdAt: group.createdAt };
   });
 
-  app.post('/:code/participants', { preHandler: requireGroupAuth }, async (request, reply) => {
+  app.post('/:code/participants', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const body = addParticipantSchema.parse(request.body);
     const participant = await prisma.participant.create({
       data: { groupId: request.groupId!, name: body.name },
@@ -107,7 +134,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     });
   });
 
-  app.post('/:code/expenses', { preHandler: requireGroupAuth }, async (request, reply) => {
+  app.post('/:code/expenses', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const body = createExpenseSchema.parse(request.body);
     const groupId = request.groupId!;
 
@@ -148,7 +175,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     });
   });
 
-  app.patch('/:code/expenses/:id', { preHandler: requireGroupAuth }, async (request, reply) => {
+  app.patch('/:code/expenses/:id', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const { id } = request.params as { code: string; id: string };
     const body = updateExpenseSchema.parse(request.body);
     const groupId = request.groupId!;
@@ -216,7 +243,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     return updated;
   });
 
-  app.delete('/:code/expenses/:id', { preHandler: requireGroupAuth }, async (request, reply) => {
+  app.delete('/:code/expenses/:id', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const { id } = request.params as { code: string; id: string };
     const existing = await prisma.expense.findFirst({ where: { id, groupId: request.groupId! } });
     if (!existing) {
@@ -268,7 +295,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/:code/payments', { preHandler: requireGroupAuth }, async (request, reply) => {
+  app.post('/:code/payments', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const body = recordPaymentSchema.parse(request.body);
     const groupId = request.groupId!;
 
