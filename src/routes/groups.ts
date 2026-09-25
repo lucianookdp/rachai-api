@@ -7,16 +7,25 @@ import { generateGroupCode } from '../lib/groupCode.js';
 import { resolveShares } from '../lib/expenseShares.js';
 import { touchGroupActivity } from '../lib/groupActivity.js';
 import { prisma } from '../lib/prisma.js';
+import { materializeRecurring, periodOf } from '../lib/recurring.js';
 import {
   addParticipantSchema,
   createExpenseSchema,
   createGroupSchema,
+  createRecurringSchema,
   joinGroupSchema,
   recordPaymentSchema,
   updateExpenseSchema,
+  updateParticipantSchema,
 } from '../schemas/group.js';
 
 const MAX_CODE_GENERATION_ATTEMPTS = 5;
+
+// Ceilings per group. Far above what a trip or a shared flat needs, low
+// enough that one group (or a script) can't grow the database without bound.
+const MAX_PARTICIPANTS = 50;
+const MAX_EXPENSES = 2000;
+const MAX_RECURRING = 10;
 
 async function requireGroupAuth(request: FastifyRequest, reply: FastifyReply) {
   const app = request.server;
@@ -36,6 +45,12 @@ async function requireGroupAuth(request: FastifyRequest, reply: FastifyReply) {
 
   request.groupId = group.id;
   request.groupRole = payload.role;
+
+  // Monthly expenses that came due since the group was last opened. A failure
+  // here must never lock anyone out of the group, so it is only logged.
+  await materializeRecurring(group.id).catch((error: unknown) =>
+    request.log.error(error, 'Adding due recurring expenses failed'),
+  );
 }
 
 // A viewer (someone who only has the invite link, not the PIN) can read
@@ -120,11 +135,26 @@ export async function registerGroupRoutes(app: FastifyInstance) {
 
   app.post('/:code/participants', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const body = addParticipantSchema.parse(request.body);
+    if ((await prisma.participant.count({ where: { groupId: request.groupId! } })) >= MAX_PARTICIPANTS) {
+      return reply.status(400).send({ error: `A group can have at most ${MAX_PARTICIPANTS} participants` });
+    }
     const participant = await prisma.participant.create({
       data: { groupId: request.groupId!, name: body.name },
     });
     await touchGroupActivity(request.groupId!);
     return reply.status(201).send(participant);
+  });
+
+  app.patch('/:code/participants/:id', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
+    const { id } = request.params as { code: string; id: string };
+    const body = updateParticipantSchema.parse(request.body);
+    const existing = await prisma.participant.findFirst({ where: { id, groupId: request.groupId! } });
+    if (!existing) {
+      return reply.status(404).send({ error: 'Participant not found' });
+    }
+    const participant = await prisma.participant.update({ where: { id }, data: { pixKey: body.pixKey } });
+    await touchGroupActivity(request.groupId!);
+    return participant;
   });
 
   app.get('/:code/participants', { preHandler: requireGroupAuth }, async (request) => {
@@ -137,6 +167,9 @@ export async function registerGroupRoutes(app: FastifyInstance) {
   app.post('/:code/expenses', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
     const body = createExpenseSchema.parse(request.body);
     const groupId = request.groupId!;
+    if ((await prisma.expense.count({ where: { groupId } })) >= MAX_EXPENSES) {
+      return reply.status(400).send({ error: `A group can have at most ${MAX_EXPENSES} expenses` });
+    }
 
     const participants = await prisma.participant.findMany({ where: { groupId } });
     const participantIds = new Set(participants.map((p) => p.id));
@@ -158,6 +191,8 @@ export async function registerGroupRoutes(app: FastifyInstance) {
         description: body.description,
         amountCents: body.amountCents,
         paidById: body.paidById,
+        category: body.category,
+        note: body.note,
         shares: { create: resolved.shares },
       },
       include: { shares: true },
@@ -205,7 +240,7 @@ export async function registerGroupRoutes(app: FastifyInstance) {
     if (!moneyFieldsChanged) {
       updated = await prisma.expense.update({
         where: { id },
-        data: { description: body.description ?? existing.description, paidById },
+        data: { description: body.description ?? existing.description, paidById, category: body.category, note: body.note },
         include: { shares: true },
       });
     } else {
@@ -232,6 +267,8 @@ export async function registerGroupRoutes(app: FastifyInstance) {
             description: body.description ?? existing.description,
             amountCents,
             paidById,
+            category: body.category,
+            note: body.note,
             shares: { create: resolved.shares },
           },
           include: { shares: true },
@@ -250,6 +287,77 @@ export async function registerGroupRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'Expense not found' });
     }
     await prisma.expense.delete({ where: { id } });
+    await touchGroupActivity(request.groupId!);
+    return reply.status(204).send();
+  });
+
+  app.get('/:code/recurring', { preHandler: requireGroupAuth }, async (request) => {
+    return prisma.recurringExpense.findMany({
+      where: { groupId: request.groupId! },
+      orderBy: { createdAt: 'asc' },
+    });
+  });
+
+  // Adds this month's expense right away and repeats it every month on
+  // dayOfMonth from then on.
+  app.post('/:code/recurring', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
+    const body = createRecurringSchema.parse(request.body);
+    const groupId = request.groupId!;
+
+    if ((await prisma.recurringExpense.count({ where: { groupId } })) >= MAX_RECURRING) {
+      return reply.status(400).send({ error: `A group can have at most ${MAX_RECURRING} monthly expenses` });
+    }
+
+    const participants = await prisma.participant.findMany({ where: { groupId } });
+    const participantIds = new Set(participants.map((p) => p.id));
+    if (!participantIds.has(body.paidById)) {
+      return reply.status(400).send({ error: 'paidById is not a participant in this group' });
+    }
+    const resolved = resolveShares(body.amountCents, participantIds, { participantIds: body.participantIds });
+    if (!resolved.ok) {
+      return reply.status(400).send({ error: resolved.error });
+    }
+
+    const period = periodOf(new Date());
+    const recurring = await prisma.$transaction(async (tx) => {
+      const created = await tx.recurringExpense.create({
+        data: {
+          groupId,
+          description: body.description,
+          amountCents: body.amountCents,
+          paidById: body.paidById,
+          participantIds: body.participantIds,
+          category: body.category,
+          dayOfMonth: body.dayOfMonth,
+          lastPeriod: period,
+        },
+      });
+      await tx.expense.create({
+        data: {
+          groupId,
+          description: body.description,
+          amountCents: body.amountCents,
+          paidById: body.paidById,
+          category: body.category,
+          recurringId: created.id,
+          recurringPeriod: period,
+          shares: { create: resolved.shares },
+        },
+      });
+      return created;
+    });
+
+    await touchGroupActivity(groupId);
+    return reply.status(201).send(recurring);
+  });
+
+  // Stops future months only; the expenses already added stay put.
+  app.delete('/:code/recurring/:id', { preHandler: [requireGroupAuth, requireEditor] }, async (request, reply) => {
+    const { id } = request.params as { code: string; id: string };
+    const { count } = await prisma.recurringExpense.deleteMany({ where: { id, groupId: request.groupId! } });
+    if (count === 0) {
+      return reply.status(404).send({ error: 'Recurring expense not found' });
+    }
     await touchGroupActivity(request.groupId!);
     return reply.status(204).send();
   });

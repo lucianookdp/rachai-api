@@ -8,15 +8,15 @@ datasource db {
 }
 
 model Group {
-  id        String   @id @default(cuid())
-  name      String
-  code      String   @unique
-  pinHash   String
+  id             String   @id @default(cuid())
+  name           String
+  code           String   @unique
+  pinHash        String
   // ISO 4217 currency code (e.g. "USD", "BRL", "EUR") for every amount in this group.
-  currency  String   @default("USD")
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  currency       String   @default("USD")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   // Bumped on every participant/expense/payment change, never on read-only
   // requests. A scheduled sweep deletes groups nobody has touched in a
   // while, keyed off this instead of createdAt, so a long-running group
@@ -26,6 +26,7 @@ model Group {
   participants Participant[]
   expenses     Expense[]
   payments     Payment[]
+  recurring    RecurringExpense[]
 
   @@index([createdAt])
   @@index([lastActivityAt])
@@ -36,31 +37,71 @@ model Participant {
   groupId   String
   group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
   name      String
+  // Optional Pix key the others can pay this person with. Never a CPF: the
+  // whole group, including view-only visitors, can read it.
+  pixKey    String?
   createdAt DateTime @default(now())
 
-  paidExpenses  Expense[]      @relation("ExpensePaidBy")
+  paidExpenses  Expense[]          @relation("ExpensePaidBy")
+  paidRecurring RecurringExpense[] @relation("RecurringPaidBy")
   shares        ExpenseShare[]
-  paymentsSent  Payment[]      @relation("PaymentFrom")
-  paymentsRecv  Payment[]      @relation("PaymentTo")
+  paymentsSent  Payment[]          @relation("PaymentFrom")
+  paymentsRecv  Payment[]          @relation("PaymentTo")
 
   @@index([groupId])
 }
 
 model Expense {
-  id          String   @id @default(cuid())
-  groupId     String
-  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  description String
-  amountCents Int
-  paidById    String
-  paidBy      Participant @relation("ExpensePaidBy", fields: [paidById], references: [id])
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String            @id @default(cuid())
+  groupId         String
+  group           Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  description     String
+  amountCents     Int
+  paidById        String
+  paidBy          Participant       @relation("ExpensePaidBy", fields: [paidById], references: [id])
+  // One of EXPENSE_CATEGORIES (src/lib/categories.ts); a plain string so a new
+  // category never needs a migration.
+  category        String            @default("other")
+  // Short free text in place of an attached receipt: nothing to store but a
+  // line of text, capped in the request schema.
+  note            String?
+  // Set when a monthly recurring expense generated this row; the pair is
+  // unique so a month can never be generated twice.
+  recurringId     String?
+  recurring       RecurringExpense? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  recurringPeriod String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   shares ExpenseShare[]
 
+  @@unique([recurringId, recurringPeriod])
   @@index([groupId])
   @@index([paidById])
+}
+
+// A monthly expense (rent, internet) that adds itself to the group once a
+// month, split equally among participantIds. There is no cron: due months
+// are filled in when the group is next opened (see src/lib/recurring.ts).
+model RecurringExpense {
+  id             String      @id @default(cuid())
+  groupId        String
+  group          Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  description    String
+  amountCents    Int
+  paidById       String
+  paidBy         Participant @relation("RecurringPaidBy", fields: [paidById], references: [id], onDelete: Cascade)
+  participantIds String[]
+  category       String      @default("other")
+  // 1 to 28, so every month has the day.
+  dayOfMonth     Int
+  // "YYYY-MM" of the latest month already added to the group.
+  lastPeriod     String
+  createdAt      DateTime    @default(now())
+
+  expenses Expense[]
+
+  @@index([groupId])
 }
 
 model ExpenseShare {
